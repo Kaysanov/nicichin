@@ -8,27 +8,43 @@ GridView::GridView(QWidget *parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
 }
 
-void GridView::paintEvent(QPaintEvent *) {
+void GridView::paintEvent(QPaintEvent *)
+{
     QPainter p(this);
+
     p.fillRect(rect(), Qt::white);
 
     p.setPen(QPen(Qt::lightGray, 1));
-    for (int x = 0; x < width(); x += m_cellSize)
+    for (int x = 0; x < width(); x += m_cellSize * m_scale)
         p.drawLine(x, 0, x, height());
-    for (int y = 0; y < height(); y += m_cellSize)
+
+    for (int y = 0; y < height(); y += m_cellSize * m_scale)
         p.drawLine(0, y, width(), y);
 
+    p.save();
+    p.scale(m_scale, m_scale);
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 100, 100));
+    for (const auto &cell : m_filledCells)
+        p.drawRect(cell);
+
     p.setPen(QPen(Qt::black, 2));
-    for (auto &route : m_routes) {
-        for (int i = 0; i + 1 < static_cast<int>(route.path.size()); ++i)
+    for (auto &route : m_routes)
+    {
+        for (int i = 0; i + 1 < (int)route.path.size(); ++i)
             p.drawLine(route.path[i], route.path[i + 1]);
     }
 
-    for (int i = 0; i < static_cast<int>(m_points.size()); i++) {
+    for (int i = 0; i < (int)m_points.size(); i++)
+    {
         if (i == m_selectedPoint) p.setBrush(Qt::red);
         else p.setBrush(Qt::blue);
+
         p.drawEllipse(m_points[i], 5, 5);
     }
+
+    p.restore();
 }
 
 int GridView::findPoint(const QPoint &pos) {
@@ -39,7 +55,33 @@ int GridView::findPoint(const QPoint &pos) {
 }
 
 void GridView::mousePressEvent(QMouseEvent *e) {
-    int idx = findPoint(e->pos());
+    QPoint worldPos = screenToWorld(e->pos());
+    int idx = findPoint(worldPos);
+
+    if (e->button() == Qt::RightButton) {
+
+        QPoint world = screenToWorld(e->pos());
+        QPoint cellPos = snapToGrid(world);
+
+        QRect filled(
+            cellPos.x(),
+            cellPos.y(),
+            m_cellSize * 2,
+            m_cellSize * 2
+        );
+
+        bool exists = false;
+        for (auto &c : m_filledCells)
+            if (c == filled) exists = true;
+
+        if (!exists)
+            m_filledCells.push_back(filled);
+
+        update();
+        return;
+    }
+
+
     if (e->button() == Qt::LeftButton) {
         if (idx != -1) {
             if (m_selectedPoint == -1) {
@@ -68,7 +110,9 @@ void GridView::mousePressEvent(QMouseEvent *e) {
             m_dragPoint = idx;
             m_isDragging = true;
         } else {
-            m_points.push_back(snapToGrid(e->pos()));
+            if (isInsideBlockedCell(snapToGrid(worldPos)))
+                return;
+            m_points.push_back(snapToGrid(worldPos));
             m_selectedPoint = (int)m_points.size() - 1;
         }
     }
@@ -79,8 +123,13 @@ void GridView::mousePressEvent(QMouseEvent *e) {
 void GridView::mouseMoveEvent(QMouseEvent *e) {
     if (m_isDragging && m_dragPoint != -1) {
         QPoint oldPos = m_points[m_dragPoint];
-        QPoint newPos = snapToGrid(e->pos());
+        QPoint world = screenToWorld(e->pos());
+        QPoint newPos = snapToGrid(world);
+
         if (newPos == oldPos) return; 
+
+        if (isInsideBlockedCell(newPos))
+            return;
 
         m_points[m_dragPoint] = newPos;
 
@@ -140,11 +189,152 @@ QPoint GridView::snapToGrid(const QPoint &p) {
     return QPoint(x, y);
 }
 
-std::vector<QPoint> GridView::buildRoute(const QPoint &a, const QPoint &b) {
+bool GridView::isInsideBlockedCell(const QPoint &pt)
+{
+    for (const QRect &rc : m_filledCells) {
+        if (rc.contains(pt))
+            return true;
+    }
+    return false;
+}
+
+bool GridView::lineIntersectsRect(const QLineF &line, const QRect &rect)
+{
+    QLineF edges[4] = {
+        QLineF(rect.topLeft(), rect.topRight()),
+        QLineF(rect.topRight(), rect.bottomRight()),
+        QLineF(rect.bottomRight(), rect.bottomLeft()),
+        QLineF(rect.bottomLeft(), rect.topLeft())
+    };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        QPointF intersectPoint;
+        if (line.intersects(edges[i], &intersectPoint) == QLineF::BoundedIntersection)
+            return true;
+    }
+    return false;
+}
+
+bool GridView::segmentIntersectsBlocked(const QLineF &seg)
+{
+    for (const QRect &rc : m_filledCells) {
+        if (lineIntersectsRect(seg, rc))
+            return true;
+    }
+    return false;
+}
+
+std::vector<QPoint> GridView::buildRoute(const QPoint &a, const QPoint &b)
+{
     std::vector<QPoint> route;
+
+    if (a == b) {
+        route.push_back(a);
+        return route;
+    }
+
+    QPoint mid1(b.x(), a.y());
+    QLineF s1(a, mid1);
+    QLineF s2(mid1, b);
+
+    bool directOk = !segmentIntersectsBlocked(s1) && !segmentIntersectsBlocked(s2);
+
+    if (directOk) {
+        route.push_back(a);
+        route.push_back(mid1);
+        route.push_back(b);
+        return route;
+    }
+
+    int offset = m_cellSize * 2;
+
+    struct Candidate { std::vector<QPoint> pts; double len; bool valid; };
+    std::vector<Candidate> cands;
+
+    auto evaluate = [&](const std::vector<QPoint> &pts) -> Candidate {
+        Candidate c; c.pts = pts; c.valid = true; c.len = 0.0;
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            QLineF seg(pts[i], pts[i+1]);
+            if (segmentIntersectsBlocked(seg)) {
+                c.valid = false;
+                return c;
+            }
+            c.len += seg.length();
+        }
+        return c;
+    };
+
+    {
+        std::vector<QPoint> pts = { a, QPoint(a.x(), a.y() - offset), QPoint(b.x(), a.y() - offset), b };
+        cands.push_back(evaluate(pts));
+    }
+
+    {
+        std::vector<QPoint> pts = { a, QPoint(a.x(), a.y() + offset), QPoint(b.x(), a.y() + offset), b };
+        cands.push_back(evaluate(pts));
+    }
+
+    {
+        std::vector<QPoint> pts = { a, QPoint(a.x() - offset, a.y()), QPoint(a.x() - offset, b.y()), b };
+        cands.push_back(evaluate(pts));
+    }
+
+    {
+        std::vector<QPoint> pts = { a, QPoint(a.x() + offset, a.y()), QPoint(a.x() + offset, b.y()), b };
+        cands.push_back(evaluate(pts));
+    }
+
+    {
+        QPoint altMid(a.x(), b.y());
+        std::vector<QPoint> pts = { a, altMid, b };
+        cands.push_back(evaluate(pts));
+    }
+
+    double bestLen = std::numeric_limits<double>::infinity();
+    int bestIdx = -1;
+    for (size_t i = 0; i < cands.size(); ++i) {
+        if (cands[i].valid && cands[i].len < bestLen) {
+            bestLen = cands[i].len;
+            bestIdx = static_cast<int>(i);
+        }
+    }
+
+    if (bestIdx != -1) {
+        return cands[bestIdx].pts;
+    }
+
+    {
+        QPoint midUp(b.x(), a.y() - offset);
+        std::vector<QPoint> pts = { a, midUp, b };
+        Candidate c = evaluate(pts);
+        if (c.valid) return c.pts;
+    }
+
     route.push_back(a);
-    QPoint mid(b.x(), a.y());
-    route.push_back(mid);
+    route.push_back(mid1);
     route.push_back(b);
     return route;
+}
+
+void GridView::wheelEvent(QWheelEvent *e)
+{
+    double numDegrees = e->angleDelta().y() / 120.0;
+
+    double factor = 1.0 + numDegrees * 0.1;
+
+    m_scale *= factor;
+
+    if (m_scale < 0.3) m_scale = 0.3;
+    if (m_scale > 3.0) m_scale = 3.0;
+
+    update();
+}
+
+QPoint GridView::screenToWorld(const QPoint &p)
+{
+    return QPoint(
+        p.x() / m_scale,
+        p.y() / m_scale
+    );
 }

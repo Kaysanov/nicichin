@@ -16,6 +16,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
     void keyPressEvent(QKeyEvent *) override;
+    void wheelEvent(QWheelEvent *) override;
+    QPoint screenToWorld(const QPoint &p);
 
     QPoint snapToGrid(const QPoint &p);
 
@@ -31,12 +33,20 @@ private:
     std::vector<Route> m_routes;
 
     std::vector<QPoint> buildRoute(const QPoint &a, const QPoint &b);
+    bool lineIntersectsRect(const QLineF &line, const QRect &rect);
+    bool segmentIntersectsBlocked(const QLineF &seg);
+    bool isInsideBlockedCell(const QPoint &pt);
+
 
     int m_selectedPoint = -1;
     int m_dragPoint = -1;
     bool m_isDragging = false;
 
     int findPoint(const QPoint &pos);
+    
+    std::vector<QRect> m_filledCells;
+    
+    double m_scale = 1.0;
 };
 
 #endif // GRID_VIEW_H

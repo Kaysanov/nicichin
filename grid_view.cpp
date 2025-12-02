@@ -55,70 +55,118 @@ int GridView::findPoint(const QPoint &pos) {
 }
 
 void GridView::mousePressEvent(QMouseEvent *e) {
-    QPoint worldPos = screenToWorld(e->pos());
-    int idx = findPoint(worldPos);
+QPoint worldPos = screenToWorld(e->pos());
+int idx = findPoint(worldPos);
 
-    if (e->button() == Qt::RightButton) {
+if (e->button() == Qt::RightButton) {
 
-        QPoint world = screenToWorld(e->pos());
-        QPoint cellPos = snapToGrid(world);
+    QPoint world = screenToWorld(e->pos());
+    QPoint cellPos = snapToGrid(world);
 
-        QRect filled(
-            cellPos.x(),
-            cellPos.y(),
-            m_cellSize * 2,
-            m_cellSize * 2
-        );
+    QRect filled(
+        cellPos.x(),
+        cellPos.y(),
+        m_cellSize * 2,
+        m_cellSize * 2
+    );
 
-        bool exists = false;
-        for (auto &c : m_filledCells)
-            if (c == filled) exists = true;
+    bool exists = false;
+    for (auto &c : m_filledCells)
+        if (c == filled) exists = true;
 
-        if (!exists)
-            m_filledCells.push_back(filled);
+    if (!exists)
+        m_filledCells.push_back(filled);
 
-        update();
-        return;
-    }
-
-
-    if (e->button() == Qt::LeftButton) {
-        if (idx != -1) {
-            if (m_selectedPoint == -1) {
-                m_selectedPoint = idx;
-            } else if (m_selectedPoint != idx) {
-
-                bool exists = false;
-                for (const auto &route : m_routes) {
-                    if ((route.a == m_selectedPoint && route.b == idx) ||
-                        (route.a == idx && route.b == m_selectedPoint)) {
-                        exists = true;
-                        break;
-                    }
-                }
-
-                if (!exists) {
-                    Route r;
-                    r.a = m_selectedPoint;
-                    r.b = idx;
-                    r.path = buildRoute(m_points[r.a], m_points[r.b]);
-                    m_routes.push_back(std::move(r));
-                }
-
-                m_selectedPoint = -1;
-            }
-            m_dragPoint = idx;
-            m_isDragging = true;
-        } else {
-            if (isInsideBlockedCell(snapToGrid(worldPos)))
-                return;
-            m_points.push_back(snapToGrid(worldPos));
-            m_selectedPoint = (int)m_points.size() - 1;
+    std::vector<int> pointsToRemove;
+    for (int i = 0; i < static_cast<int>(m_points.size()); ++i) {
+        if (filled.contains(m_points[i])) {
+            pointsToRemove.push_back(i);
         }
     }
+    if (!pointsToRemove.empty()) {
+        std::sort(pointsToRemove.rbegin(), pointsToRemove.rend());
+        for (int id : pointsToRemove) {
+            // удалить маршруты, связанные с этой точкой
+            m_routes.erase(
+                std::remove_if(
+                    m_routes.begin(), m_routes.end(),
+                    [&](const Route &r) { return r.a == id || r.b == id; }
+                ),
+                m_routes.end()
+            );
+            m_points.erase(m_points.begin() + id);
+            for (auto &route : m_routes) {
+                if (route.a > id) --route.a;
+                if (route.b > id) --route.b;
+            }
+        }
+    } else {
+        for (auto it = m_routes.begin(); it != m_routes.end(); ) {
+            std::vector<QPoint> newPath;
+            bool found = false;
+            for (int mult = 1; mult <= MAX_OFFSET_MULTIPLIER; ++mult) {
+                newPath = buildRoute(m_points[it->a], m_points[it->b], mult);
+                if (!pathIntersectsBlocked(newPath)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                it->path = std::move(newPath);
+                ++it;
+            } else {
+                it = m_routes.erase(it);
+            }
+        }
+    }
+
     update();
+    return;
 }
 
+if (e->button() == Qt::LeftButton) {
+    if (idx != -1) {
+        if (m_selectedPoint == -1) {
+            m_selectedPoint = idx;
+        } else if (m_selectedPoint != idx) {
+
+            bool exists = false;
+            for (const auto &route : m_routes) {
+                if ((route.a == m_selectedPoint && route.b == idx) ||
+                    (route.a == idx && route.b == m_selectedPoint)) {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists) {
+                Route r;
+                r.a = m_selectedPoint;
+                r.b = idx;
+                std::vector<QPoint> path;
+                bool found = false;
+                for (int mult = 1; mult <= MAX_OFFSET_MULTIPLIER; ++mult) {
+                    path = buildRoute(m_points[r.a], m_points[r.b], mult);
+                    if (!pathIntersectsBlocked(path)) { found = true; break; }
+                }
+                r.path = std::move(path);
+                if (!pathIntersectsBlocked(r.path))
+                    m_routes.push_back(std::move(r));
+            }
+
+            m_selectedPoint = -1;
+        }
+        m_dragPoint = idx;
+        m_isDragging = true;
+    } else {
+        if (isInsideBlockedCell(snapToGrid(worldPos)))
+            return;
+        m_points.push_back(snapToGrid(worldPos));
+        m_selectedPoint = (int)m_points.size() - 1;
+    }
+}
+update();
+}
 
 void GridView::mouseMoveEvent(QMouseEvent *e) {
     if (m_isDragging && m_dragPoint != -1) {
@@ -198,7 +246,7 @@ bool GridView::isInsideBlockedCell(const QPoint &pt)
     return false;
 }
 
-bool GridView::lineIntersectsRect(const QLineF &line, const QRect &rect)
+bool GridView::lineIntersectsRect(const QLineF &line, const QRect &rect) const
 {
     QLineF edges[4] = {
         QLineF(rect.topLeft(), rect.topRight()),
@@ -216,7 +264,7 @@ bool GridView::lineIntersectsRect(const QLineF &line, const QRect &rect)
     return false;
 }
 
-bool GridView::segmentIntersectsBlocked(const QLineF &seg)
+bool GridView::segmentIntersectsBlocked(const QLineF &seg) const
 {
     for (const QRect &rc : m_filledCells) {
         if (lineIntersectsRect(seg, rc))
@@ -225,45 +273,45 @@ bool GridView::segmentIntersectsBlocked(const QLineF &seg)
     return false;
 }
 
-std::vector<QPoint> GridView::buildRoute(const QPoint &a, const QPoint &b)
+std::vector<QPoint> GridView::buildRoute(const QPoint &a, const QPoint &b, int maxOffsetMultiplier)
 {
-    std::vector<QPoint> route;
+std::vector<QPoint> route;
 
-    if (a == b) {
-        route.push_back(a);
-        return route;
-    }
+if (a == b) {
+    route.push_back(a);
+    return route;
+}
 
-    QPoint mid1(b.x(), a.y());
-    QLineF s1(a, mid1);
-    QLineF s2(mid1, b);
+QPoint mid1(b.x(), a.y());
+QLineF s1(a, mid1);
+QLineF s2(mid1, b);
 
-    bool directOk = !segmentIntersectsBlocked(s1) && !segmentIntersectsBlocked(s2);
+if (!segmentIntersectsBlocked(s1) && !segmentIntersectsBlocked(s2)) {
+    route.push_back(a);
+    route.push_back(mid1);
+    route.push_back(b);
+    return route;
+}
 
-    if (directOk) {
-        route.push_back(a);
-        route.push_back(mid1);
-        route.push_back(b);
-        return route;
-    }
+int baseOffset = m_cellSize * 2;
 
-    int offset = m_cellSize * 2;
-
-    struct Candidate { std::vector<QPoint> pts; double len; bool valid; };
-    std::vector<Candidate> cands;
-
-    auto evaluate = [&](const std::vector<QPoint> &pts) -> Candidate {
-        Candidate c; c.pts = pts; c.valid = true; c.len = 0.0;
-        for (size_t i = 0; i + 1 < pts.size(); ++i) {
-            QLineF seg(pts[i], pts[i+1]);
-            if (segmentIntersectsBlocked(seg)) {
-                c.valid = false;
-                return c;
-            }
-            c.len += seg.length();
+struct Candidate { std::vector<QPoint> pts; double len; bool valid; };
+auto evaluate = [&](const std::vector<QPoint> &pts) -> Candidate {
+    Candidate c; c.pts = pts; c.valid = true; c.len = 0.0;
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        QLineF seg(pts[i], pts[i+1]);
+        if (segmentIntersectsBlocked(seg)) {
+            c.valid = false;
+            return c;
         }
-        return c;
-    };
+        c.len += seg.length();
+    }
+    return c;
+};
+
+for (int mult = 1; mult <= maxOffsetMultiplier; ++mult) {
+    int offset = baseOffset * mult;
+    std::vector<Candidate> cands;
 
     {
         std::vector<QPoint> pts = { a, QPoint(a.x(), a.y() - offset), QPoint(b.x(), a.y() - offset), b };
@@ -310,11 +358,13 @@ std::vector<QPoint> GridView::buildRoute(const QPoint &a, const QPoint &b)
         Candidate c = evaluate(pts);
         if (c.valid) return c.pts;
     }
+}
 
-    route.push_back(a);
-    route.push_back(mid1);
-    route.push_back(b);
-    return route;
+route.push_back(a);
+route.push_back(mid1);
+route.push_back(b);
+return route;
+
 }
 
 void GridView::wheelEvent(QWheelEvent *e)
@@ -337,4 +387,15 @@ QPoint GridView::screenToWorld(const QPoint &p)
         p.x() / m_scale,
         p.y() / m_scale
     );
+}
+
+bool GridView::pathIntersectsBlocked(const std::vector<QPoint> &path) const
+{
+    if (path.size() < 2) return false;
+        for (size_t i = 0; i + 1 < path.size(); ++i) {
+        QLineF seg(path[i], path[i+1]);
+            
+            if (segmentIntersectsBlocked(seg)) return true;
+        }
+        return false;
 }

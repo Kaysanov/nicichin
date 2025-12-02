@@ -32,10 +32,11 @@ private:
     };
     std::vector<Route> m_routes;
 
-    std::vector<QPoint> buildRoute(const QPoint &a, const QPoint &b);
-    bool lineIntersectsRect(const QLineF &line, const QRect &rect);
-    bool segmentIntersectsBlocked(const QLineF &seg);
+    std::vector<QPoint> buildRoute(const QPoint &a, const QPoint &b, int maxOffsetMultiplier = 1);
+    bool lineIntersectsRect(const QLineF &line, const QRect &rect) const;
+    bool segmentIntersectsBlocked(const QLineF &seg) const;
     bool isInsideBlockedCell(const QPoint &pt);
+    bool pathIntersectsBlocked(const std::vector<QPoint> &path) const;
 
 
     int m_selectedPoint = -1;
@@ -47,6 +48,8 @@ private:
     std::vector<QRect> m_filledCells;
     
     double m_scale = 1.0;
+
+    static constexpr int MAX_OFFSET_MULTIPLIER = 5;
 };
 
 #endif // GRID_VIEW_H

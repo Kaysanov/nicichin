@@ -52,13 +52,28 @@ void GridView::paintEvent(QPaintEvent *)
     {
         Point* point = dynamic_cast<Point*>(elements[i]);
         if (point) {
-            if (i == m_selectedPoint) 
+            if (i == m_selectedPoint)
                 p.setBrush(Qt::red);
-            else 
+            else
                 p.setBrush(Qt::blue);
 
             p.drawEllipse(point->getPosition(), 5, 5);
         }
+    }
+
+    // Рисуем временный прямоугольник препятствия
+    if (m_creatingObstacle) {
+        p.setPen(QPen(QColor(255, 100, 100, 128), 2));
+        p.setBrush(QColor(255, 100, 100, 50));
+        QRect rect(m_obstacleStart, m_obstacleEnd);
+        rect = rect.normalized();
+        
+        // Выравниваем прямоугольник по сетке для отображения
+        QPoint topLeft = m_scene->snapToGrid(rect.topLeft());
+        QPoint bottomRight = m_scene->snapToGrid(rect.bottomRight());
+        QRect alignedRect(topLeft, bottomRight);
+        
+        p.drawRect(alignedRect);
     }
 
     p.restore();
@@ -68,20 +83,10 @@ void GridView::mousePressEvent(QMouseEvent *e) {
     QPoint worldPos = screenToWorld(e->pos());
     
     if (e->button() == Qt::RightButton) {
-        // Добавляем препятствие
-        QPoint cellPos = m_scene->snapToGrid(worldPos);
-        QRect filled(
-            cellPos.x(),
-            cellPos.y(),
-            50,
-            50
-        );
-        
-        m_scene->addObstacle(filled);
-        
-        // Перестраиваем маршруты
-        m_scene->rebuildRoutes();
-        
+        // Начинаем создание препятствия
+        m_creatingObstacle = true;
+        m_obstacleStart = worldPos;
+        m_obstacleEnd = worldPos;
         update();
         return;
     }
@@ -122,7 +127,6 @@ void GridView::mousePressEvent(QMouseEvent *e) {
             }
         }
     }
-    update();
 }
 
 void GridView::mouseMoveEvent(QMouseEvent *e) {
@@ -136,14 +140,46 @@ void GridView::mouseMoveEvent(QMouseEvent *e) {
         if (point && !m_scene->isInsideBlockedCell(newPos)) {
             point->setPosition(newPos);
             
-            // Перестраиваем маршруты, связанные с этой точкой
-            m_scene->removeRoutesWithPoint(m_dragPoint);
+            // Перестраиваем все маршруты
+            m_scene->rebuildRoutes();
             update();
         }
     }
+    
+    // Обновляем конечную точку препятствия
+    if (m_creatingObstacle) {
+        m_obstacleEnd = screenToWorld(e->pos());
+        update();
+    }
 }
 
-void GridView::mouseReleaseEvent(QMouseEvent *) {
+void GridView::mouseReleaseEvent(QMouseEvent *e) {
+    if (m_creatingObstacle && e->button() == Qt::RightButton) {
+        // Завершаем создание препятствия
+        m_creatingObstacle = false;
+        
+        // Создаем прямоугольник препятствия
+        QRect obstacleRect(m_obstacleStart, m_obstacleEnd);
+        obstacleRect = obstacleRect.normalized();
+        
+        // Проверяем, что прямоугольник имеет минимальный размер
+        if (obstacleRect.width() > 5 && obstacleRect.height() > 5) {
+            // Выравниваем прямоугольник по сетке
+            QPoint topLeft = m_scene->snapToGrid(obstacleRect.topLeft());
+            QPoint bottomRight = m_scene->snapToGrid(obstacleRect.bottomRight());
+            
+            // Создаем новый прямоугольник, выровненный по сетке
+            QRect alignedRect(topLeft, bottomRight);
+            
+            m_scene->addObstacle(alignedRect);
+            
+            // Перестраиваем маршруты
+            m_scene->rebuildRoutes();
+        }
+        
+        update();
+    }
+    
     m_isDragging = false;
     m_dragPoint = -1;
 }

@@ -27,6 +27,11 @@ private:
     int m_dragPoint = -1;
     bool m_isDragging = false;
     double m_scale = 1.0;
+    
+    // Для создания препятствий
+    bool m_creatingObstacle = false;
+    QPoint m_obstacleStart;
+    QPoint m_obstacleEnd;
 };
 
 #endif // GRID_VIEW_H

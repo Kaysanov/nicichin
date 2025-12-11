@@ -1,0 +1,53 @@
+# Build directory
+build/
+
+# Qt build files
+*.pro.user
+*.pro.user.*
+
+# CMake build files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CMakeScripts/
+Testing/
+CMakeTmp/
+CMakeLists.txt.user
+
+# IDE files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.out
+
+# Qt moc files
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# Qt Creator files
+*.autosave
+*.user
+*.user.*
+
+# CLion files
+.idea/
+*.iws
+*.ipr
+*.iml
+
+# VS Code files
+.vscode/

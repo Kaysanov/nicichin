@@ -1,6 +1,8 @@
 #include "route_builder.h"
 #include <limits>
 #include <algorithm>
+#include <QQueue>
+#include <QHash>
 
 RouteBuilder::RouteBuilder()
 {
@@ -42,106 +44,75 @@ bool RouteBuilder::segmentIntersectsBlocked(const QLineF& seg, const std::vector
 }
 
 std::vector<QPoint> RouteBuilder::buildRouteInternal(
-    const QPoint& a, 
-    const QPoint& b, 
+    const QPoint& a,
+    const QPoint& b,
     const std::vector<QRect>& obstacles,
     int maxOffsetMultiplier)
 {
-    std::vector<QPoint> route;
+    const int step = 25;
 
-    if (a == b) {
-        route.push_back(a);
-        return route;
-    }
+    QPoint start(
+        a.x() / step,
+        a.y() / step
+    );
+    QPoint goal(
+        b.x() / step,
+        b.y() / step
+    );
 
-    QPoint mid1(b.x(), a.y());
-    QLineF s1(a, mid1);
-    QLineF s2(mid1, b);
-
-    if (!segmentIntersectsBlocked(s1, obstacles) && !segmentIntersectsBlocked(s2, obstacles)) {
-        route.push_back(a);
-        route.push_back(mid1);
-        route.push_back(b);
-        return route;
-    }
-
-    int baseOffset = 50; // фиксированный размер ячейки
-
-    struct Candidate { 
-        std::vector<QPoint> pts; 
-        double len; 
-        bool valid; 
-    };
-    
-    auto evaluate = [&](const std::vector<QPoint>& pts) -> Candidate {
-        Candidate c; 
-        c.pts = pts; 
-        c.valid = true; 
-        c.len = 0.0;
-        for (size_t i = 0; i + 1 < pts.size(); ++i) {
-            QLineF seg(pts[i], pts[i+1]);
-            if (segmentIntersectsBlocked(seg, obstacles)) {
-                c.valid = false;
-                return c;
-            }
-            c.len += seg.length();
-        }
-        return c;
+    auto isBlocked = [&](int gx, int gy) {
+        QPoint real(gx * step, gy * step);
+        for (const QRect& rc : obstacles)
+            if (rc.contains(real))
+                return true;
+        return false;
     };
 
-    for (int mult = 1; mult <= maxOffsetMultiplier; ++mult) {
-        int offset = baseOffset * mult;
-        std::vector<Candidate> cands;
+    QQueue<QPoint> q;
+    QHash<QPoint, QPoint> parent;
 
+    q.enqueue(start);
+    parent[start] = start;
+
+    const QPoint dirs[4] = {
+        QPoint(1, 0),
+        QPoint(-1, 0),
+        QPoint(0, 1),
+        QPoint(0, -1)
+    };
+
+    while (!q.isEmpty())
+    {
+        QPoint cur = q.dequeue();
+
+        if (cur == goal)
+            break;
+
+        for (auto d : dirs)
         {
-            std::vector<QPoint> pts = { a, QPoint(a.x(), a.y() - offset), QPoint(b.x(), a.y() - offset), b };
-            cands.push_back(evaluate(pts));
-        }
+            QPoint nxt(cur.x() + d.x(), cur.y() + d.y());
 
-        {
-            std::vector<QPoint> pts = { a, QPoint(a.x(), a.y() + offset), QPoint(b.x(), a.y() + offset), b };
-            cands.push_back(evaluate(pts));
-        }
+            if (parent.contains(nxt)) continue;
+            if (isBlocked(nxt.x(), nxt.y())) continue;
 
-        {
-            std::vector<QPoint> pts = { a, QPoint(a.x() - offset, a.y()), QPoint(a.x() - offset, b.y()), b };
-            cands.push_back(evaluate(pts));
-        }
-
-        {
-            std::vector<QPoint> pts = { a, QPoint(a.x() + offset, a.y()), QPoint(a.x() + offset, b.y()), b };
-            cands.push_back(evaluate(pts));
-        }
-
-        {
-            QPoint altMid(a.x(), b.y());
-            std::vector<QPoint> pts = { a, altMid, b };
-            cands.push_back(evaluate(pts));
-        }
-
-        double bestLen = std::numeric_limits<double>::infinity();
-        int bestIdx = -1;
-        for (size_t i = 0; i < cands.size(); ++i) {
-            if (cands[i].valid && cands[i].len < bestLen) {
-                bestLen = cands[i].len;
-                bestIdx = static_cast<int>(i);
-            }
-        }
-
-        if (bestIdx != -1) {
-            return cands[bestIdx].pts;
-        }
-
-        {
-            QPoint midUp(b.x(), a.y() - offset);
-            std::vector<QPoint> pts = { a, midUp, b };
-            Candidate c = evaluate(pts);
-            if (c.valid) return c.pts;
+            parent[nxt] = cur;
+            q.enqueue(nxt);
         }
     }
 
-    route.push_back(a);
-    route.push_back(mid1);
-    route.push_back(b);
-    return route;
+    // Если цель недостижима
+    if (!parent.contains(goal))
+        return { a, b };
+
+    std::vector<QPoint> pathGrid;
+    QPoint p = goal;
+
+    while (p != start) {
+        pathGrid.push_back(QPoint(p.x() * step, p.y() * step));
+        p = parent[p];
+    }
+    pathGrid.push_back(QPoint(start.x() * step, start.y() * step));
+
+    std::reverse(pathGrid.begin(), pathGrid.end());
+    return pathGrid;
 }
